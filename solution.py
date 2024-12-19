@@ -70,7 +70,9 @@ def policy_gradient_loss_discounted(
     T, N = logp.shape  # T is the episode length, N is the number of trajectories
     with torch.no_grad():
         discounted_returns = discount_cum_sum(tensor_r, gamma)
-        g_hat = torch.sum(discounted_returns * logp) / (T * N)
+    # Compute the policy gradient loss using the discounted returns
+    # NOTE: needs to be able to be backpropagated-through
+    g_hat = torch.sum(discounted_returns * logp) / (T * N)
     return -g_hat
 
 
@@ -88,9 +90,10 @@ def policy_gradient_loss_advantages(
         policy_loss: scalar tensor representing the policy gradient loss
     """
     # TODO: compute the policy gradient estimate using the advantage estimate weighting
+    T, N = logp.shape  # T is the episode length, N is the number of trajectories
     with torch.no_grad():
-        policy_gradient = torch.sum(-logp * advantage_estimates)
-    return policy_gradient
+        g_hat = torch.sum(logp * advantage_estimates) / (T * N)
+    return -g_hat
 
 
 def value_loss(values: torch.Tensor, value_targets: torch.Tensor) -> torch.Tensor:
@@ -98,8 +101,10 @@ def value_loss(values: torch.Tensor, value_targets: torch.Tensor) -> torch.Tenso
     Given the values and the value targets, compute the value function regression loss
     """
     # TODO: compute the value function L2 loss
-
-    return torch.nn.functional.mse_loss(values, value_targets)
+    T, N = values.shape  # T is the episode length, N is the number of trajectories
+    # sum of L2 losses
+    l2_loss = torch.sum((values - value_targets) ** 2) / (T * N)
+    return l2_loss
 
 
 def ppo_loss(p_ratios, advantage_estimates, epsilon):
@@ -108,8 +113,12 @@ def ppo_loss(p_ratios, advantage_estimates, epsilon):
     based on the clipped surrogate objective
     """
     # TODO: compute the PPO loss
-    clipped_ratios = torch.clamp(p_ratios, 1 - epsilon, 1 + epsilon)
-    policy_loss = torch.min(
-        p_ratios * advantage_estimates, clipped_ratios * advantage_estimates
+    T, N = p_ratios.shape  # T is the episode length, N is the number of trajectories
+    # Compute the clipped surrogate objective
+    clipped_surrogate = torch.min(
+        p_ratios * advantage_estimates,
+        torch.clamp(p_ratios, 1 - epsilon, 1 + epsilon) * advantage_estimates,
     )
-    return -torch.sum(policy_loss)
+    # Compute the PPO loss
+    ppo_loss = -torch.sum(clipped_surrogate) / (T * N)
+    return ppo_loss
