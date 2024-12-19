@@ -1,7 +1,9 @@
 import torch
 
 
-def policy_gradient_loss_simple(logp: torch.Tensor, tensor_r: torch.Tensor) -> torch.Tensor:
+def policy_gradient_loss_simple(
+    logp: torch.Tensor, tensor_r: torch.Tensor
+) -> torch.Tensor:
     """
     Given the log-probabilities of the policy and the rewards, compute the scalar loss
     representing the policy gradient.
@@ -14,9 +16,10 @@ def policy_gradient_loss_simple(logp: torch.Tensor, tensor_r: torch.Tensor) -> t
         policy_loss: scalar tensor representing the policy gradient loss
     """
     # TODO: start by calculating the cumulative returns of the trajectories, and then compute the policy gradient
-    # with torch.no_grad():
-
-    raise NotImplementedError("policy_gradient_loss_simple not implemented!")
+    T, N = logp.shape  # T is the episode length, N is the number of trajectories
+    grad_sum = torch.sum(logp, dim=0)
+    g_hat = torch.sum(tensor_r * grad_sum) / (T * N)
+    return -g_hat
 
 
 def discount_cum_sum(rewards: torch.Tensor, gamma: float) -> torch.Tensor:
@@ -36,11 +39,21 @@ def discount_cum_sum(rewards: torch.Tensor, gamma: float) -> torch.Tensor:
         discounted_cumulative_returns: (T, N) tensor of discounted cumulative returns
     """
     # TODO: implement the discounted cummulative sum, i.e. the discounted returns computed from rewards and gamma
+    T, N = rewards.shape
+    discounted_cumulative_returns = torch.zeros_like(rewards)
+    for t in reversed(range(T)):
+        if t == T - 1:
+            discounted_cumulative_returns[t] = rewards[t]
+        else:
+            discounted_cumulative_returns[t] = (
+                rewards[t] + gamma * discounted_cumulative_returns[t + 1]
+            )
+    return discounted_cumulative_returns
 
-    raise NotImplementedError("discount_cum_sum not implemented!")
 
-
-def policy_gradient_loss_discounted(logp: torch.Tensor, tensor_r: torch.Tensor, gamma: float) -> torch.Tensor:
+def policy_gradient_loss_discounted(
+    logp: torch.Tensor, tensor_r: torch.Tensor, gamma: float
+) -> torch.Tensor:
     """
     Given the policy log0probabilities, rewards and the discount factor gamma, compute the
     policy gradient loss using discounted returns.
@@ -53,13 +66,17 @@ def policy_gradient_loss_discounted(logp: torch.Tensor, tensor_r: torch.Tensor, 
     Returns:
         policy_loss: scalar tensor representing the policy gradient loss
     """
-    # with torch.no_grad():
     # TODO: compute discounted returns of the trajectories from the reward tensor, then compute the policy gradient
+    T, N = logp.shape  # T is the episode length, N is the number of trajectories
+    with torch.no_grad():
+        discounted_returns = discount_cum_sum(tensor_r, gamma)
+        g_hat = torch.sum(discounted_returns * logp) / (T * N)
+    return -g_hat
 
-    raise NotImplementedError("policy_gradient_loss_discounted not implemented!")
 
-
-def policy_gradient_loss_advantages(logp: torch.Tensor, advantage_estimates: torch.Tensor) -> torch.Tensor:
+def policy_gradient_loss_advantages(
+    logp: torch.Tensor, advantage_estimates: torch.Tensor
+) -> torch.Tensor:
     """
     Given the policy log-probabilities and the advantage estimates, compute the policy gradient loss
 
@@ -71,24 +88,28 @@ def policy_gradient_loss_advantages(logp: torch.Tensor, advantage_estimates: tor
         policy_loss: scalar tensor representing the policy gradient loss
     """
     # TODO: compute the policy gradient estimate using the advantage estimate weighting
-
-    raise NotImplementedError("policy_gradient_loss_advantages not implemented!")
+    with torch.no_grad():
+        policy_gradient = torch.sum(-logp * advantage_estimates)
+    return policy_gradient
 
 
 def value_loss(values: torch.Tensor, value_targets: torch.Tensor) -> torch.Tensor:
-    """ 
+    """
     Given the values and the value targets, compute the value function regression loss
     """
     # TODO: compute the value function L2 loss
 
-    raise NotImplementedError("value_loss not implemented!")
+    return torch.nn.functional.mse_loss(values, value_targets)
 
 
 def ppo_loss(p_ratios, advantage_estimates, epsilon):
-    """ 
+    """
     Given the probability ratios, advantage estimates and the clipping parameter epsilon, compute the PPO loss
     based on the clipped surrogate objective
     """
     # TODO: compute the PPO loss
-
-    raise NotImplementedError("ppo_loss not implemented!")
+    clipped_ratios = torch.clamp(p_ratios, 1 - epsilon, 1 + epsilon)
+    policy_loss = torch.min(
+        p_ratios * advantage_estimates, clipped_ratios * advantage_estimates
+    )
+    return -torch.sum(policy_loss)
