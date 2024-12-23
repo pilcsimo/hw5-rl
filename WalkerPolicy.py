@@ -1,102 +1,111 @@
 import torch
-import numpy as np
-from torch import nn
+import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions import Normal, Beta
-
-DIM_ACTOR_NN = 256  # Increased size
-DIM_VALUE_NN = 128  # Increased size
+from torch.distributions import Normal
 
 class WalkerPolicy(nn.Module):
-    def __init__(self, state_dim: int = 29, action_dim: int = 8, load_weights: bool = False):
+    """
+    A simpler actor-critic model for your quadruped using a Normal distribution.
+    This is similar to the pendulum example's approach:
+      - We have an actor network that outputs (mu, sigma) for each action dim.
+      - We have a critic network that outputs a scalar value estimate V(s).
+    """
+
+    def __init__(self, 
+                 state_dim=29, 
+                 action_dim=8, 
+                 hidden_actor_sizes=(64,128,64),
+                 hidden_critic_sizes=(64,128,64)):
         super().__init__()
-        self.actor_network = nn.Sequential(
-            nn.Linear(state_dim, DIM_ACTOR_NN),
-            nn.ReLU(),
-            nn.Linear(DIM_ACTOR_NN, DIM_ACTOR_NN),
-            nn.ReLU(),
-            nn.Linear(DIM_ACTOR_NN, action_dim * 2)  # Output alpha and beta parameters for Beta distribution
-        )
-        self.value_network = nn.Sequential(
-            nn.Linear(state_dim, DIM_VALUE_NN),
-            nn.ReLU(),
-            nn.Linear(DIM_VALUE_NN, DIM_VALUE_NN),
-            nn.ReLU(),
-            nn.Linear(DIM_VALUE_NN, 1)
-        )
-        self.log_std = nn.Parameter(torch.zeros(action_dim))
+        
+        # ----------------------
+        # Actor Network
+        # ----------------------
+        actor_layers = []
+        input_size = state_dim
+        # build hidden layers
+        for hidden_size in hidden_actor_sizes:
+            actor_layers.append(nn.Linear(input_size, hidden_size))
+            actor_layers.append(nn.ReLU())
+            input_size = hidden_size
+        # final layer -> 2 * action_dim (mu, sigma)
+        actor_layers.append(nn.Linear(input_size, 2 * action_dim))
+        self.actor_network = nn.Sequential(*actor_layers)
 
-        # load learned stored network weights after initialization
-        if load_weights:
-            self.load_weights()
+        # ----------------------
+        # Critic Network
+        # ----------------------
+        critic_layers = []
+        input_size = state_dim
+        for hidden_size in hidden_critic_sizes:
+            critic_layers.append(nn.Linear(input_size, hidden_size))
+            critic_layers.append(nn.ReLU())
+            input_size = hidden_size
+        # final value head -> 1 output
+        critic_layers.append(nn.Linear(input_size, 1))
+        self.value_network = nn.Sequential(*critic_layers)
 
-    def determine_actions(self, states: torch.Tensor) -> torch.Tensor:
-        """
-        Given states tensor, returns the deterministic actions tensor.
-        This would be used for control.
-
-        Args:
-            states (torch.Tensor): (N, state_dim) tensor
-
-        Returns:
-            actions (torch.Tensor): (N, action_dim) tensor
-        """
-        with torch.no_grad():
-            mean = self.actor_network(states)
-            alpha, beta = torch.chunk(mean, 2, dim=-1)
-            alpha = F.softplus(alpha) + 1
-            beta = F.softplus(beta) + 1
-            dist = Beta(alpha, beta)
-            actions = dist.sample()
-        return actions
+        print("WalkerPolicy (Normal) created with:\n"
+              f"Actor: {self.actor_network}\n"
+              f"Critic: {self.value_network}")
 
     def forward(self, states: torch.Tensor):
         """
-        Given states tensor, returns the actions, log probabilities, and state values.
-        This is used for training the agent.
-
-        Args:
-            states (torch.Tensor): (N, state_dim) tensor
-
-        Returns:
-            actions (torch.Tensor): (N, action_dim) tensor
-            log_probs (torch.Tensor): (N, action_dim) tensor
-            state_values (torch.Tensor): (N, 1) tensor
+        We return:
+          actions:      [N, action_dim]
+          log_probs:    [N]
+          state_values: [N, 1]
+          (We can skip returning exploration_var now since we dropped Beta.)
         """
-        mean = self.actor_network(states)
-        alpha, beta = torch.chunk(mean, 2, dim=-1)
-        alpha = F.softplus(alpha) + 1
-        beta = F.softplus(beta) + 1
-        dist = Beta(alpha, beta)
-        actions = dist.sample()
-        log_probs = dist.log_prob(actions).sum(dim=-1)
-        state_values = self.value_network(states)
-        return actions, log_probs, state_values
+        # 1) Actor: get mu, sigma
+        actor_out = self.actor_network(states)       # [N, 2*action_dim]
+        mu, sigma = torch.chunk(actor_out, 2, dim=-1)   # each [N, action_dim]
+
+        # ensure sigma > 0
+        sigma = F.softplus(sigma) + 1e-5  # small offset to avoid zero
+
+        # 2) Create Normal distribution & sample actions
+        dist = Normal(mu, sigma)
+        actions = dist.sample()                                 # [N, action_dim]
+        log_probs = dist.log_prob(actions).sum(dim=-1)          # [N]
+
+        # 3) Critic: value estimate
+        state_values = self.value_network(states)               # [N, 1]
+
+        return actions, log_probs, state_values, None
+
+    def determine_actions(self, states: torch.Tensor):
+        """
+        For deployment: returns a 'deterministic' or 'mean' action (or you can still sample).
+        We'll just return mu for a more stable control approach. 
+        """
+        with torch.no_grad():
+            actor_out = self.actor_network(states)              # [N, 2*action_dim]
+            mu, sigma = torch.chunk(actor_out, 2, dim=-1)
+            sigma = F.softplus(sigma) + 1e-5
+            # We'll do deterministic = mu. If you prefer stochastic, sample from Normal.
+            return mu  # shape [N, action_dim]
 
     def log_prob(self, actions: torch.Tensor, states: torch.Tensor) -> torch.Tensor:
         """
-        Given actions and states tensors, returns the log probabilities of the actions.
-        This is used for computing the PPO loss.
-
-        Args:
-            actions (torch.Tensor): (N, action_dim) tensor
-            states (torch.Tensor): (N, state_dim) tensor
-
-        Returns:
-            log_probs (torch.Tensor): (N, action_dim) tensor
+        Compute log_prob of given actions under the current Normal distribution.
+        actions & states shape: [N, action_dim], [N, state_dim].
         """
-        mean = self.actor_network(states)
-        alpha, beta = torch.chunk(mean, 2, dim=-1)
-        alpha = F.softplus(alpha) + 1
-        beta = F.softplus(beta) + 1
-        dist = Beta(alpha, beta)
-        log_probs = dist.log_prob(actions).sum(dim=-1)
+        actor_out = self.actor_network(states)
+        mu, sigma = torch.chunk(actor_out, 2, dim=-1)
+        sigma = F.softplus(sigma) + 1e-5
+        dist = Normal(mu, sigma)
+        log_probs = dist.log_prob(actions).sum(dim=-1)  # [N]
         return log_probs
 
-    def save_weights(self, path: str = 'walker_weights.pt') -> None:
-        # helper function to save your network weights
+    def value_estimates(self, states: torch.Tensor) -> torch.Tensor:
+        """
+        Returns V(s) = critic output, shape [N, 1].
+        """
+        return self.value_network(states)
+
+    def save_weights(self, path='walker_weights.pt'):
         torch.save(self.state_dict(), path)
 
-    def load_weights(self, path: str = 'walker_weights.pt') -> None:
-        # helper function to load your network weights
+    def load_weights(self, path='walker_weights.pt'):
         self.load_state_dict(torch.load(path))
