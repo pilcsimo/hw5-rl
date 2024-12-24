@@ -18,6 +18,9 @@ class WalkerPolicy(nn.Module):
                  hidden_critic_sizes=(64,128,64)):
         super().__init__()
         
+        # Custom name for this model
+        self.name = "Freddy"
+        
         # ----------------------
         # Actor Network
         # ----------------------
