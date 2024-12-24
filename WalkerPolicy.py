@@ -11,7 +11,7 @@ class WalkerPolicy(nn.Module):
       - We have a critic network that outputs a scalar value estimate V(s).
     """
 
-    def __init__(self, 
+    def __init__(self, load_weights=False,
                  state_dim=29, 
                  action_dim=8, 
                  hidden_actor_sizes=(64,128,64),
@@ -51,6 +51,9 @@ class WalkerPolicy(nn.Module):
         print("WalkerPolicy (Normal) created with:\n"
               f"Actor: {self.actor_network}\n"
               f"Critic: {self.value_network}")
+        
+        if load_weights:
+            self.load_weights()
 
     def forward(self, states: torch.Tensor):
         """
